@@ -1,0 +1,289 @@
+---
+title: "R Notebook"
+author: "Hongye Jiang"
+output: html_notebook
+---
+
+## Introduction: 
+To me, happiness is eating dessert, having a good sleep, reading some books, staying with my family, lying on the beach and so on. It's easy to tell why I'm happy since it is one of the most common feeling. 
+Now I'm going to learn happiness of other people. I'm using the dataset called HappyDB, which is "a corpus of 100,000 crowd-sourced happy moments". I wonder the difference of what make people happy between groups. 
+
+## Data Analysis
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(dplyr)
+library(tidytext)
+library(gridExtra)
+library(ngram)
+library(ggmap)
+```
+
+```{r read data, echo=FALSE, warning=FALSE, message=FALSE}
+processed_moments=read_csv('/Users/yeyejiang/Documents/GitHub/Spring2019-Proj1-yeyejiang/output/processed_moments.csv')
+demographic<-read_csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/demographic.csv')
+happymoment <- processed_moments %>% 
+  inner_join(demographic, by='wid') %>%
+  mutate(count = sapply(processed_moments$text, wordcount)) %>%
+  filter(gender %in% c("m", "f")) %>%
+  filter(parenthood %in% c("n", "y")) %>%
+  filter(marital %in% c("single", "married")) %>%
+  mutate(reflection_period = fct_recode(reflection_period, 
+                                        months_3 = "3m", hours_24 = "24h"))
+happymoment$age <- as.numeric(happymoment$age)
+happymoment<-happymoment%>%
+  mutate(age_group=if_else(age<=21,'02_21'
+                           , if_else((age>21&age<=25),'22_25'
+                                     ,if_else((age>25&age<=30),'26_30'
+                                              ,if_else((age>30&age<=40),'31_40'
+                                                       ,if_else((age>40&age<=50),'41_50'
+                                                                ,if_else((age>50&age<=60),'51_60','above 60')))))))
+```
+
+```{r,echo=FALSE}
+par(mfrow=c(1,3))
+f1=ggplot(happymoment, aes(x=1, fill=gender)) +
+  geom_bar(position="fill")+coord_flip()
+
+f2=ggplot(happymoment, aes(x=1, fill=marital)) +
+       geom_bar(position="fill")+coord_flip()
+
+f3=ggplot(happymoment, aes(x=1, fill=parenthood)) +
+       geom_bar(position="fill")+coord_flip()
+grid.arrange(f1,f2,f3)
+```
+This is a brief review of our data. Both two variable in each plots shows the data is large enough to analyse.  
+
+```{r bag of words, warning=FALSE, message=FALSE, echo=FALSE}
+### Create a bag of words using the text data
+bag_of_words <-  happymoment %>%
+  unnest_tokens(word, text)
+word_count <- bag_of_words %>%
+  count(word, sort = TRUE)
+```
+
+```{r bigram, warning=FALSE, message=FALSE, echo=FALSE}
+### Create bigrams using the text data
+hm_bigrams <- happymoment %>%
+  filter(count != 1) %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+bigram_counts <- hm_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  count(word1, word2, sort = TRUE)
+```
+
+```{r, fig.height=6, fig.width=6,echo=FALSE}
+newcorpus<-Corpus(VectorSource(processed_moments$text))
+tdm.all<-TermDocumentMatrix(newcorpus,control = list(weighting = function(x)weightTfIdf(x, normalize =FALSE)))
+tdm.tidy<-tidy(tdm.all)
+tdm.overall<-summarise(group_by(tdm.tidy, term), countnum=sum(count)) %>% arrange(desc(countnum))
+
+wordcloud(tdm.overall$term, tdm.overall$countnum,
+          scale=c(5,0.5),
+          max.words=100,
+          min.freq=1,
+          random.order=FALSE,
+          use.r.layout=T,
+          random.color=FALSE,
+          colors=brewer.pal(9, 'Reds'))
+
+#wordcloud2(data.frame( tdm.overall$term, tdm.overall$countnum)[1:100,],size = 0.3,shape = 'pentagon',minRotation = -pi/2, maxRotation = -pi/2)
+```
+
+From this wordcloud, the most frequent words participators mentioned are friend, day, time. These words can't tell us much information because they are common words in daily life. Then comes family, home, enjoyed, dinner and so on. These are also common since everyone owns these. Words in lighter color contains cat, birthday, school, movie. These refers to small groups of people, or a specific time period...
+Let's get further information by dividing these participators. 
+
+
+```{r,echo=FALSE}
+gender_word_count <- bag_of_words %>%
+  group_by(gender)%>%
+  count(word, sort = TRUE)%>%
+  inner_join(word_count ,'word')
+
+gender_ggplot<-filter(gender_word_count, word %in% word_count$word[1:20]) %>% 
+  mutate(value=if_else(gender=='f',n.x,-n.x))
+ggplot(gender_ggplot,aes(x=(reorder(word,-n.y)),y=value,fill=gender))+
+  geom_bar(stat="identity")+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))+
+  labs(x="Words", y="Count",title="Top 20 Words")
+```
+
+First, We divided the dataset into two groups, male and female. I listed 20 words with the higher frequent by order. If there's no difference between these groups, both the trend would look smooth. 
+However,from this histogram, I find the bar of 'son' and 'daughter' move towards positive, meanwhile played, game move towards negative side. It shows that men and women have different focuses. 
+
+```{r, warning=FALSE,echo=FALSE}
+gender_data<-bag_of_words %>% group_by(gender) %>% count(word, sort = TRUE)
+
+female <- filter(gender_data,gender=='f')%>%
+  arrange(desc(n)) %>% 
+  mutate(prop=n/sum(n))%>%
+  data.frame()
+ggplot(female[1:15,],aes(x=(reorder(word,-prop)),y=prop))+
+  geom_bar(stat="identity",fill='#F8766D')+
+  labs(x="Words", y="Freq",title="Most Frequency Words from Female")
+
+male <- filter(gender_data,gender=='m')%>%
+  arrange(desc(n)) %>% 
+  mutate(prop=n/sum(n))%>%
+  data.frame()
+ggplot(male[1:15,],aes(x=(reorder(word,-prop)),y=prop))+
+  geom_bar(stat="identity",fill='#00BFC4')+
+  labs(x="Words", y="Freq",title="Most Frequency Words from Male")
+```
+
+Here's the detailed information. These two plots lists the highest frequent words corresponding to female and male. For female, 'Son', 'family', 'daughter' are more frequently talked, while for male, these key words are less frequently talked than 'played' and 'watched'. 
+
+
+```{r, warning=FALSE,echo=FALSE}
+newfdf<-female[female$word %in% word_count$word[1:500],]
+newmdf<-male[male$word %in% word_count$word[1:500],]
+genderdf<-newfdf %>% inner_join(newmdf,by='word') %>% inner_join(data.frame(word_count),by='word')
+
+fullgf<-ggplot(genderdf, aes(x=prop.x, y=prop.y, color= prop.y-prop.x)) +
+  geom_point(shape=21, color="gray") +
+  geom_abline(color = 'red', lty = 2) +
+  #geom_jitter(alpha = 0.1, size = 1, width = 0.3, height = 0.3) +
+  geom_text(aes(label = word),check_overlap = TRUE,col='black', size=3)+
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  labs(x="female", y="male",title="", size="Total Word Frequency") 
+
+ggplot(genderdf, aes(x=prop.x, y=prop.y, color= prop.y-prop.x)) +
+  geom_point(shape=21, color="gray") +
+  geom_abline(color = 'red', lty = 2) +
+  #geom_jitter(alpha = 0.1, size = 1, width = 0.3, height = 0.3) +
+  geom_text(aes(label = word),check_overlap = TRUE,size=3,col='black')+
+  scale_x_log10(labels = percent_format(),limits=c(0.0008,0.01)) +
+  scale_y_log10(labels = percent_format(),limits=c(0.0007,0.01)) +
+  labs(x="female", y="male",title="", size="Total Word Frequency")
+
+```
+
+This plot further indicates that there's clear distinction between male and female about pleasure. Key words near the red regression line are the ones without tendency. But the outliers which are far away from the line, indicate a tendency, such as 'video', 'won', 'laugh', 'surprise'. 
+
+```{r,echo=FALSE}
+male_outliers <- genderdf%>%mutate(dif=(prop.y-prop.x))%>%filter(dif>0.0005,n<1500)
+cat('Some outliers for male:', male_outliers[,'word'], '.\n')
+female_outliers <-  genderdf%>%mutate(dif=(prop.y-prop.x))%>%filter(dif< -0.0005,n<1000)
+cat('Some outliers for female:', female_outliers[,'word'], '.\n')
+#fit<-lm(genderdf$prop.y~genderdf$prop.x)
+#ccc=genderdf%>%mutate(dist=genderdf$prop.y-(genderdf$prop.x*fit$coefficients+fit$residuals))
+#ccc[ccc$dist>0.0005&ccc$n<1000 ,]
+```
+
+```{r,echo=FALSE}
+a1<-happymoment%>%group_by(gender) %>% summarise(n=n())
+a2<-happymoment%>%
+  group_by(gender,predicted_category) %>% 
+  summarise(num=n()) %>% 
+  inner_join(a1,'gender')%>%
+  mutate(freq=num/n)
+ggplot(a2,aes(x=predicted_category,y=freq,fill=gender))+
+  geom_bar(stat='identity', position="dodge")
+ggplot(a2,aes(x=predicted_category,y=freq,fill=gender))+
+  geom_bar(stat='identity', position="stack")
+```
+According to the dataset, 'achievement' and 'affection' are pointed out by more people. It shows that female enjoy affection more than male do, while male likes achievement. There's no huge difference between two groups on other category. I wonder what other factors may result this difference. 
+
+```{r,echo=FALSE}
+d1<-happymoment%>%filter(gender=='m') %>%group_by(age_group) %>% count()
+d2<-happymoment%>%filter(gender=='m')%>%
+  group_by(age_group,predicted_category) %>% 
+  summarise(num=n()) %>% 
+  inner_join(d1,'age_group')%>%
+  mutate(freq=num/n)%>%
+  na.omit()
+plt1=ggplot(d2,aes(x=predicted_category,y=freq,fill=age_group))+
+  geom_bar(stat='identity', position="dodge")+
+  labs(title="Male")
+
+e1<-happymoment%>%filter(gender=='f') %>%group_by(age_group) %>% count()
+e2<-happymoment%>%filter(gender=='f')%>%
+  group_by(age_group,predicted_category) %>% 
+  summarise(num=n()) %>% 
+  inner_join(e1,'age_group')%>%
+  mutate(freq=num/n)%>%
+  na.omit()
+plt2=ggplot(e2,aes(x=predicted_category,y=freq,fill=age_group))+
+  geom_bar(stat='identity', position="dodge")+
+  labs(title="Female")
+grid.arrange(plt1,plt2)
+```
+I plot the affection of age on topics for male and female separatly. First look at male, there's simple trend on each category as age increases, especially affection. The proportion of elderly get happiness from affection is much more than younger people. However, for female, it is interesting that the trends for achievement and affection look like two parabola. Female has lowest 'achievement' and 'enjoy_the_moment' and highest 'affection' from happiness in their 30s, compared to other age groups.
+
+```{r,echo=FALSE}
+#ggplot(happymoment,aes(x=marital,y=age))+geom_boxplot()+scale_y_continuous(limits=c(0,80))
+ggplot(happymoment,aes(x=age_group,fill=marital))+geom_bar( position="stack")
+```
+The proportion of married people exceed single people from 26-30 to 31-40. So it is reasonable to guess that marital status is possibly related to the vertex of parabola. 
+
+```{r,echo=FALSE}
+c1<-happymoment%>%filter(gender=='f') %>%group_by(marital) %>% summarise(n=n())
+c2<-happymoment%>%filter(gender=='f')%>%
+  group_by(marital,predicted_category) %>% 
+  summarise(num=n()) %>% 
+  inner_join(c1,'marital')%>%
+  mutate(freq=num/n)
+c2$marital=factor(c2$marital,levels=c('single','married'))
+ggplot(c2,aes(x=predicted_category,y=freq,fill=marital))+
+  scale_fill_manual(values=c("#F48498", "#FFE0B4"))+
+  geom_bar(stat='identity', position="dodge")+
+  labs(title="married woman VS single woman")
+```
+For female, after married, the bar of achievement decreases. Also the bar of affection has a huge increases, which corresponds to the peak in the previous plot on group 31-40. 
+
+```{r,echo=FALSE}
+f1<-happymoment%>%filter(gender=='m') %>%group_by(marital) %>% summarise(n=n())
+f2<-happymoment%>%filter(gender=='m')%>%
+  group_by(marital,predicted_category) %>% 
+  summarise(num=n()) %>% 
+  inner_join(f1,'marital')%>%
+  mutate(freq=num/n)
+fff2=ggplot(f2,aes(x=predicted_category,y=freq,fill=marital))+
+  scale_fill_manual(values=c("#F48498", "#FFE0B4"))+
+  geom_bar(stat='identity', position="dodge")+
+  labs(title="married man VS single man")
+fff3=ggplot(happymoment,aes(x=predicted_category,fill=marital))+
+  geom_bar(position="dodge")+
+  labs(title="married VS single")
+#grid.arrange(fff1,fff2)
+```
+
+```{r,echo=FALSE}
+fem <- table((happymoment%>%filter(gender=='f'))$predicted_category)
+mal <- table((happymoment%>%filter(gender=='m'))$predicted_category)
+mapp=rbind(fem,mal)
+heatmap.2(as.matrix(mapp),scale = "none", margin=c(6, 6),trace = "none", density.info = "none")
+```
+From this plot, we can see that 'affection' and 'enjoy_the_moment' are grouped together, which are mentioned more times than others. 
+
+```{r,echo=FALSE}
+#xx=happymoment%>%group_by(age_group,predicted_category,gender)%>%summarise(num=n())
+#happymoment%>%group_by(age_group)%>%summarise(num=n())
+fem <- happymoment%>%filter(gender=='f')
+fem_02_21 <- table((fem%>%filter(age_group=='02_21'))$predicted_category)
+fem_22_25 <- table((fem%>%filter(age_group=='22_25'))$predicted_category)
+fem_26_30 <- table((fem%>%filter(age_group=='26_30'))$predicted_category)
+fem_31_40 <- table((fem%>%filter(age_group=='31_40'))$predicted_category)
+fem_41_50 <- table((fem%>%filter(age_group=='41_50'))$predicted_category)
+fem_51_60 <- table((fem%>%filter(age_group=='51_60'))$predicted_category)
+fem_above_60 <- table((fem%>%filter(age_group=='above 60'))$predicted_category)
+mal <- happymoment%>%filter(gender=='m')
+mal_02_21 <- table((mal%>%filter(age_group=='02_21'))$predicted_category)
+mal_22_25 <- table((mal%>%filter(age_group=='22_25'))$predicted_category)
+mal_26_30 <- table((mal%>%filter(age_group=='26_30'))$predicted_category)
+mal_31_40 <- table((mal%>%filter(age_group=='31_40'))$predicted_category)
+mal_41_50 <- table((mal%>%filter(age_group=='41_50'))$predicted_category)
+mal_51_60 <- table((mal%>%filter(age_group=='51_60'))$predicted_category)
+mal_above_60 <- table((mal%>%filter(age_group=='above 60'))$predicted_category)
+mappp<-rbind(fem_02_21,fem_22_25,fem_26_30 ,fem_31_40,fem_41_50,fem_51_60 ,fem_above_60,mal_02_21 ,mal_22_25 ,mal_26_30,mal_31_40,mal_41_50,mal_51_60,mal_above_60)
+heatmap.2(as.matrix(mappp),scale = "none", margin=c(6, 6),key=F,trace = "none", density.info = "none")
+```
+It confirms that 'affection' and 'enjoy_the_moment' are a group. In addition, people from 22-40 are grouped together. It shows that age has more important influences in this clustering than gender. 
+
+
+##Reference:
+Akari Asai, Sara Evensen, Behzad Golshan, Alon Halevy, Vivian Li, Andrei Lopatenko, 
+Daniela Stepanov, Yoshihiko Suhara, Wang-Chiew Tan, Yinzhan Xu, 
+``HappyDB: A Corpus of 100,000 Crowdsourced Happy Moments'', LREC '18, May 2018.
